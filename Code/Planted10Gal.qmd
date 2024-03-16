@@ -1,0 +1,52 @@
+---
+title: "10 Gallon Shrimp Tank"
+author: "CLB"
+format: html
+editor: visual
+---
+
+```{r}
+#| include: false
+
+library(tidyverse)
+library(ggthemes)
+library(scales)
+library(here)
+```
+
+# Load Data
+
+```{r}
+aquaLog <- read_csv(here("Data/API_FreshwaterTestKit.csv")) %>%
+  mutate(Day = as.numeric(difftime(Date, first(Date), units = "days")),
+         KH = dKH * 17.848, #degrees KH to mg/L
+         GH = dGH * 17.848) %>% #degrees GH to mg/L
+  pivot_longer(
+    cols = c(pH, Ammonia, Nitrite, Nitrate, KH, GH),
+    names_to = "Parameter",
+    values_to = "Value"
+  ) %>%
+  mutate(Parameter = factor(
+    Parameter,
+    levels = c("pH", "Ammonia", "Nitrite", "Nitrate", "KH", "GH"),
+    ordered = T
+  ))
+```
+
+# Figures
+
+```{r}
+aquaLog %>%
+  ggplot(aes(Day, Value, color = Parameter)) +
+  geom_point() +
+  geom_line() +
+  labs(y = "mg/L", title = "10 Gallon Planted Tank") +
+  scale_color_manual(values = c("pH" = "#adcd34", "Ammonia" = "#85c2bb", "Nitrite" = "#a02c8a", "Nitrate" = "#ff6347", "KH" = "#fdae61", "GH" = "#abd9e9")) +
+  theme_few() +
+  theme(legend.position = "None",
+        plot.title = element_text(hjust = 0.5, face = "bold")) +
+  facet_wrap( ~ Parameter, scales = "free_y") -> apiRes
+apiRes
+
+ggsave("apiRes.png", apiRes, here("Figs/"), device = "png", dpi = "retina")
+```
