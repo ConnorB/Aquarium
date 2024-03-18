@@ -7,8 +7,9 @@ editor: visual
 
 ```{r}
 #| include: false
-
 library(tidyverse)
+library(data.table)
+library(zoo)
 library(ggthemes)
 library(scales)
 library(here)
@@ -18,7 +19,8 @@ library(here)
 
 ```{r}
 aquaLog <- read_csv(here("Data/API_FreshwaterTestKit.csv")) %>%
-  mutate(Day = as.numeric(difftime(Date, first(Date), units = "days")),
+  mutate(Date = mdy(Date, tz = "America/Chicago"),
+         Day = as.numeric(difftime(Date, first(Date), units = "days")),
          KH = dKH * 17.848, #degrees KH to mg/L
          GH = dGH * 17.848) %>% #degrees GH to mg/L
   pivot_longer(
@@ -31,6 +33,42 @@ aquaLog <- read_csv(here("Data/API_FreshwaterTestKit.csv")) %>%
     levels = c("pH", "Ammonia", "Nitrite", "Nitrate", "KH", "GH"),
     ordered = T
   ))
+
+#Load YSI data
+ysiDat <- list.files(here("Data/"), "YSI*", full.names = T, recursive = T)
+#KOR Export Col Names
+korCol <- c("Date", "Time", "FracSec", "SiteName", "Cond_uScm", "nlfCond", "DO.pctsat", "DO.obs", "Sal_psu", "SpCond_uScm", "TDS_mgL", "Turb_mgL", "TSS_mgL", "pH", "pH_mV", "Temp_C", "BP_mmHg")
+#Read in read in CSV
+ysiDat <- rbindlist(sapply(ysiDat, fread, skip = 1, col.names = korCol, simplify = F))
+
+ysiDat <- ysiDat %>% 
+  mutate(dateTime = round_date(mdy_hms(paste(Date, Time, sep = " ")), unit = "minute")) %>% 
+  drop_na(dateTime) %>% 
+  mutate(dateTime = with_tz(dateTime, tzone = "America/Chicago")) %>% 
+  select(dateTime, DO.pctsat, DO.obs, Cond_uScm, SpCond_uScm, TDS_mgL, pH, Temp_C, BP_mmHg) %>% 
+  mutate(across(c(DO.pctsat, DO.obs, Cond_uScm, SpCond_uScm, TDS_mgL, pH, Temp_C, BP_mmHg), as.numeric))
+```
+
+## Clean up YSI Data
+
+```{r}
+# Get min and max dateTime
+# Create a data frame with a sequence of datetimes covering the min to max range
+dateSeq <- ysiDat %>%
+  summarise(minDate = min(dateTime), maxDate = max(dateTime)) %>%
+  mutate(dateTime = list(seq(from = minDate, to = maxDate, by = "1 sec")), .keep = "none") %>%
+  unnest(dateTime)
+
+# Join with the original seQ to get df of all dates every 15 min
+# Interpolate numeric columns
+ysiDat <- dateSeq %>%
+  left_join(ysiDat, by = "dateTime") %>%
+  mutate(across(where(is.numeric), ~ na.approx(.x, maxgap = 1200, na.rm = F))) %>% 
+  pivot_longer(
+    cols = c(DO.pctsat, DO.obs, Cond_uScm, SpCond_uScm, TDS_mgL, pH, Temp_C, BP_mmHg),
+    names_to = "Parameter",
+    values_to = "Value"
+  )
 ```
 
 # Figures
@@ -49,4 +87,23 @@ aquaLog %>%
 apiRes
 
 ggsave("apiRes.png", apiRes, here("Figs/"), device = "png", dpi = "retina")
+
+ysiDat %>%
+  ggplot(aes(x = dateTime, y = Value, color = Parameter)) +
+  geom_line() +
+  labs(y = "", x = "") +
+  scale_color_manual(values = c("DO.pctsat" = "#1f78b4", "DO.obs" = "#a6cee3", "Cond_uScm" = "#b2df8a", "SpCond_uScm" = "#33a02c", "TDS_mgL" = "#fb9a99", "pH" = "#e31a1c", "Temp_C" = "#fdbf6f", "BP_mmHg" = "#ff7f00")) +
+  theme_few() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(
+    angle = 45,
+    vjust = 1,
+    hjust = 1
+  ),
+  axis.title.x = element_blank()) +
+  facet_wrap(~ Parameter, ncol = 2, scales = "free_y") -> ysiFig
+ysiFig
+ggsave("logDat.png", ysiFig, here("Figs/"), device = "png", dpi = "retina")
+
 ```
